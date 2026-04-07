@@ -328,29 +328,112 @@ def main():
     print("ref_output:")
     print(ref_output)
 
-    torch.testing.assert_close(ref_output, output, rtol=1e-2, atol=1e-2)
-    torch.testing.assert_close(blocked_ref_output, output, rtol=1e-2, atol=1e-2)
+    # Check final output correctness (wrapped so debug block still runs on failure)
+    output_ok = True
+    for label, a, b in [
+        ("ref vs kernel", ref_output, output),
+        ("blocked_ref vs kernel", blocked_ref_output, output),
+    ]:
+        try:
+            torch.testing.assert_close(a, b, rtol=1e-2, atol=1e-2)
+        except AssertionError as e:
+            print(f"[FAIL] final output mismatch ({label}): {e}")
+            output_ok = False
 
-    print("\n===== DEBUG CHECK (Torch blocked ref vs Kernel debug) =====")
-    debug0_diff = (blocked_debug["debug0"] - kernel_debug0).abs().max().item()
-    debug1_diff = (
-        (blocked_debug["debug1"].to(torch.float32) - kernel_debug1.to(torch.float32))
-        .abs()
-        .max()
-        .item()
-    )
-    debug2_diff = (
-        (blocked_debug["debug2"][..., :block_n] - kernel_debug2).abs().max().item()
-    )
-    debug3_diff = (
-        (blocked_debug["debug3"][..., :block_n] - kernel_debug3).abs().max().item()
-    )
+    # Per-block debug comparison —— locate which cid / iteration diverges
+    DIFF_THRESHOLD = 1e-2
+    TOP_K_POSITIONS = 3  # show top-k diverging positions per failing block
 
-    print(f"max|DEBUG0(scores) diff| = {debug0_diff:.6e}")
-    print(f"max|DEBUG1(prob cast) diff| = {debug1_diff:.6e}")
-    print(f"max|DEBUG2(contrib) diff| = {debug2_diff:.6e}")
-    print(f"max|DEBUG3(acc_o) diff| = {debug3_diff:.6e}")
-    print("All check passed.")
+    print("\n===== DEBUG CHECK (Torch blocked ref vs Kernel debug, per block) =====")
+    print(
+        f"{'cid':>4} {'iter':>4} | "
+        f"{'D0(scores)':>12} {'D1(prob)':>12} "
+        f"{'D2(contrib)':>12} {'D3(acc_o)':>12}"
+    )
+    print("-" * 68)
+
+    any_fail = False
+    for m_blk in range(num_m_blocks):
+        for n_blk in range(num_n_blocks):
+            d0 = (
+                blocked_debug["debug0"][m_blk, n_blk] - kernel_debug0[m_blk, n_blk]
+            ).abs()
+            d1 = (
+                blocked_debug["debug1"][m_blk, n_blk].to(torch.float32)
+                - kernel_debug1[m_blk, n_blk].to(torch.float32)
+            ).abs()
+            d2 = (
+                blocked_debug["debug2"][m_blk, n_blk, :, :block_n]
+                - kernel_debug2[m_blk, n_blk]
+            ).abs()
+            d3 = (
+                blocked_debug["debug3"][m_blk, n_blk, :, :block_n]
+                - kernel_debug3[m_blk, n_blk]
+            ).abs()
+
+            max_d0 = d0.max().item()
+            max_d1 = d1.max().item()
+            max_d2 = d2.max().item()
+            max_d3 = d3.max().item()
+            fail = max(max_d0, max_d1, max_d2, max_d3) > DIFF_THRESHOLD
+
+            tag = " <-- FAIL" if fail else ""
+            print(
+                f"{m_blk:>4} {n_blk:>4} | "
+                f"{max_d0:>12.4e} {max_d1:>12.4e} "
+                f"{max_d2:>12.4e} {max_d3:>12.4e}"
+                f"{tag}"
+            )
+
+            if fail:
+                any_fail = True
+                # For each failing debug tensor, show top diverging positions
+                ref_ker_pairs = [
+                    (
+                        "D0(scores)",
+                        d0,
+                        blocked_debug["debug0"][m_blk, n_blk],
+                        kernel_debug0[m_blk, n_blk],
+                    ),
+                    (
+                        "D1(prob)",
+                        d1,
+                        blocked_debug["debug1"][m_blk, n_blk].to(torch.float32),
+                        kernel_debug1[m_blk, n_blk].to(torch.float32),
+                    ),
+                    (
+                        "D2(contrib)",
+                        d2,
+                        blocked_debug["debug2"][m_blk, n_blk, :, :block_n],
+                        kernel_debug2[m_blk, n_blk],
+                    ),
+                    (
+                        "D3(acc_o)",
+                        d3,
+                        blocked_debug["debug3"][m_blk, n_blk, :, :block_n],
+                        kernel_debug3[m_blk, n_blk],
+                    ),
+                ]
+                for name, diff_map, ref_val, ker_val in ref_ker_pairs:
+                    if diff_map.max().item() <= DIFF_THRESHOLD:
+                        continue
+                    flat = diff_map.flatten()
+                    top_indices = flat.topk(min(TOP_K_POSITIONS, flat.numel())).indices
+                    rows = (top_indices // diff_map.shape[-1]).tolist()
+                    cols = (top_indices % diff_map.shape[-1]).tolist()
+                    for r, c in zip(rows, cols):
+                        print(
+                            f"    {name}[row={r},col={c}]: "
+                            f"ref={ref_val[r, c].item():.5f}  "
+                            f"ker={ker_val[r, c].item():.5f}  "
+                            f"diff={diff_map[r, c].item():.5f}"
+                        )
+
+    print("-" * 68)
+    if any_fail or not output_ok:
+        print("[RESULT] Precision divergence detected. See FAIL rows above.")
+    else:
+        print("[RESULT] All blocks passed.")
 
 
 if __name__ == "__main__":
