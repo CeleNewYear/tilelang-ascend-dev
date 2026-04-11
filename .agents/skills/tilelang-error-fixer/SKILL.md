@@ -31,6 +31,22 @@ Before answering, follow AGENTS.md section "Docs Auto Routing Rules (Mandatory)"
 - verify load_nd2nz and store_fixpipe size/layout consistency
 - verify sync_block_set and sync_block_wait pairing
 
+## Runtime signature quick triage (Mandatory)
+
+When logs contain one or more of the following signatures:
+
+- `AclSetCompileopt(... ACL_PRECISION_MODE ...)`, `error code is 500001`
+- `ERR00100 PTA call acl api failed`
+- `Environment_Error_Failed_To_Import_Python_Module`
+- `Cannot find global function cce.product_init`
+
+Prioritize environment initialization diagnosis before kernel-level debugging:
+
+1. Verify CANN environment scripts are sourced correctly (`set_env.sh`) and Python path matches the active environment.
+2. Verify torch_npu lazy-init path (`torch_npu.npu._lazy_init()` / `current_device`) with a minimal script.
+3. For CANN versions earlier than 8.5, try compatibility workaround: `export ACL_OP_INIT_MODE=1`.
+4. For CANN 8.5 and later, this issue is expected to be fixed; keep step 3 only as fallback when the above signatures still appear.
+
 ## Official docs to consult
 
 - docs/Tilelang算子调试指南.md

@@ -55,6 +55,7 @@ Use the matching skill whenever the user asks for:
 - compile/runtime error analysis on npuir branch
 - code review, lint/format checks, PR readiness
 - commit/push/rebase/upstream sync, PR or issue workflow
+- torch_npu or ACL environment initialization failures (device init, precision mode init, cce.product_init import errors)
 
 Developer-mode MixCV trigger rule:
 - If one kernel contains Cube-side T.gemm and Vector-side at least one v-prefix op (such as T.vadd/T.vmul/T.vexp/T.vcast/T.vbrc), treat it as MixCV and use tilelang-mixcv-skill.
