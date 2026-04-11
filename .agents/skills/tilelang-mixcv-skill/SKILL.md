@@ -34,6 +34,24 @@ Before answering, follow AGENTS.md section "Docs Auto Routing Rules (Mandatory)"
 - T.sync_block_set and T.sync_block_wait
 - Pipelined loops where suitable
 
+## GPU-to-NPU kernel launch mapping rule (Mandatory)
+
+When adapting a GPU TileLang kernel that uses 2D launch indices, for example:
+
+- with T.Kernel(grid_x, grid_y, threads=128) as (pid_x, pid_y)
+
+convert it to NPU 1D logical-core launch:
+
+- with T.Kernel(grid_x * grid_y, is_npu=True) as (cid, _)
+- pid_x = cid // grid_y
+- pid_y = cid % grid_y
+
+Notes:
+
+- `pid_x` and `pid_y` are logical names; keep source naming if it is `pid_m/pid_n` or others.
+- `grid_x` and `grid_y` must match the original GPU decomposition semantics.
+- Apply this rule for pure vector kernels as well when reference code originates from GPU 2D launch.
+
 ## References
 
 - references/pipeline.md

@@ -36,6 +36,24 @@ Before answering, follow AGENTS.md section "Docs Auto Routing Rules (Mandatory)"
 3. Accumulate with T.gemm(initC controlled by k-loop)
 4. Store outputs with store_fixpipe in Expert mode or T.copy in Developer mode
 
+## GPU-to-NPU kernel launch mapping rule (Mandatory)
+
+When adapting a GPU TileLang kernel that uses 2D launch indices, for example:
+
+- with T.Kernel(grid_x, grid_y, threads=128) as (pid_x, pid_y)
+
+convert it to NPU 1D logical-core launch:
+
+- with T.Kernel(grid_x * grid_y, is_npu=True) as (cid, _)
+- pid_x = cid // grid_y
+- pid_y = cid % grid_y
+
+Notes:
+
+- `pid_x` and `pid_y` are logical names; keep source naming if it is `pid_m/pid_n` or others.
+- `grid_x` and `grid_y` must match the original GPU decomposition semantics.
+- Apply this rule for pure vector kernels as well when reference code originates from GPU 2D launch.
+
 ## NZ format rule
 
 - NZ format path is Expert mode only.
