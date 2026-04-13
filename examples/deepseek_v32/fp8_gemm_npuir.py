@@ -22,7 +22,6 @@ def _gen_fp8_e4m3_like_tensor(shape, device: torch.device) -> torch.Tensor:
 
 @tl.jit(target="npuir")
 def fp8_gemm_kernel(
-    M,
     N,
     K,
     out_dtype="float16",
@@ -34,13 +33,13 @@ def fp8_gemm_kernel(
     block_k=128,
     num_stages=2,
 ):
-    assert out_dtype in ["float16", "float32"]
+    assert out_dtype in ["float16", "float32", "bfloat16"]
     assert in_dtype in ["float16"]
     assert group_size == block_n, "This kernel expects group_size == block_n"
-    assert M % block_m == 0, "M must be divisible by block_m"
     assert N % block_n == 0, "N must be divisible by block_n"
     assert K % block_k == 0, "K must be divisible by block_k"
 
+    M = T.symbolic("M")
     k_groups = T.ceildiv(K, group_size)
     n_groups = T.ceildiv(N, group_size)
 
@@ -142,6 +141,8 @@ def fp8_gemm_torch_ref(
 
     if out_dtype == "float16":
         return out.to(torch.float16)
+    if out_dtype == "bfloat16":
+        return out.to(torch.bfloat16)
     return out
 
 
@@ -162,7 +163,6 @@ def fp8_gemm(
     n = b.shape[0]
 
     kernel = fp8_gemm_kernel(
-        M=m,
         N=n,
         K=k,
         out_dtype=out_dtype,
@@ -205,14 +205,15 @@ def run_test_case(m: int, n: int, k: int, out_dtype: str = "float16"):
     out = fp8_gemm(a, a_s, b, b_s, out_dtype=out_dtype, group_size=group_size)
     ref = fp8_gemm_torch_ref(a, a_s, b, b_s, group_size=group_size, out_dtype=out_dtype)
 
-    atol = 2e-2 if out_dtype == "float16" else 1e-2
-    rtol = 2e-2 if out_dtype == "float16" else 1e-2
+    atol = 2e-2 if out_dtype in ("float16", "bfloat16") else 1e-2
+    rtol = 2e-2 if out_dtype in ("float16", "bfloat16") else 1e-2
     torch.testing.assert_close(out.float(), ref.float(), rtol=rtol, atol=atol)
 
 
 def run_test():
     run_test_case(m=128, n=256, k=256, out_dtype="float16")
     run_test_case(m=96, n=128, k=256, out_dtype="float32")
+    run_test_case(m=128, n=256, k=256, out_dtype="bfloat16")
     print("\033[92mFP8 GEMM NPU test passed.\033[0m")
 
 
