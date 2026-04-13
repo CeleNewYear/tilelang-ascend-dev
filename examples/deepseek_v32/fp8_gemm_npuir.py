@@ -28,63 +28,62 @@ def fp8_gemm_kernel(
 
     M = T.symbolic("M")
     group_size = 128
-    block_m = 32
-    block_n = 128
-    block_k = 128
+    block_M = 32
+    block_N = 128
+    block_K = 128
 
     assert in_dtype in ["float16"]
-    assert group_size == block_n, "This kernel expects group_size == block_n"
-    assert N % block_n == 0, "N must be divisible by block_n"
-    assert K % block_k == 0, "K must be divisible by block_k"
-
-    k_groups = T.ceildiv(K, group_size)
-    n_groups = T.ceildiv(N, group_size)
+    assert group_size == block_N, "This kernel expects group_size == block_N"
+    assert N % block_N == 0, "N must be divisible by block_N"
+    assert K % block_K == 0, "K must be divisible by block_K"
 
     @T.prim_func
     def fp8_gemm_kernel_(
         A: T.Tensor((M, K), in_dtype),
         B: T.Tensor((N, K), in_dtype),
         C: T.Tensor((M, N), out_dtype),
-        scales_a: T.Tensor((M, k_groups), "float32"),
-        scales_b: T.Tensor((n_groups, k_groups), "float32"),
+        scales_a: T.Tensor((M, T.ceildiv(K, group_size)), "float32"),
+        scales_b: T.Tensor(
+            (T.ceildiv(N, group_size), T.ceildiv(K, group_size)), "float32"
+        ),
     ):
-        # GPU 2D launch (pid_m, pid_n) -> NPU 1D launch (cid) mapping.
-        with T.Kernel(T.ceildiv(M, block_m) * T.ceildiv(N, block_n), is_npu=True) as (
+        # GPU 2D launch (by, bx) -> NPU 1D launch (cid) mapping.
+        with T.Kernel(T.ceildiv(M, block_M) * T.ceildiv(N, block_N), is_npu=True) as (
             cid,
             _,
         ):
-            pid_m = cid // T.ceildiv(N, block_n)
-            pid_n = cid % T.ceildiv(N, block_n)
+            bx = cid % T.ceildiv(N, block_N)
+            by = cid // T.ceildiv(N, block_N)
 
-            A_shared = T.alloc_shared((block_m, block_k), in_dtype)
-            B_shared = T.alloc_shared((block_n, block_k), in_dtype)
-            Scale_C_shared = T.alloc_shared((block_m), "float32")
-            C_local = T.alloc_fragment((block_m, block_n), accum_dtype)
-            C_local_accum = T.alloc_fragment((block_m, block_n), accum_dtype)
+            A_shared = T.alloc_shared((block_M, block_K), in_dtype)
+            B_shared = T.alloc_shared((block_N, block_K), in_dtype)
+            Scale_C_shared = T.alloc_shared((block_M), "float32")
+            C_local = T.alloc_fragment((block_M, block_N), accum_dtype)
+            C_local_accum = T.alloc_fragment((block_M, block_N), accum_dtype)
 
             T.clear(C_local_accum)
-            k_iters = T.ceildiv(K, block_k)
+            k_iters = T.ceildiv(K, block_K)
             for k in T.Pipelined(k_iters, num_stages=2):
-                k_start = k * block_k
+                k_start = k * block_K
 
                 T.copy(
                     A[
-                        pid_m * block_m : (pid_m + 1) * block_m,
-                        k_start : k_start + block_k,
+                        by * block_M : (by + 1) * block_M,
+                        k_start : k_start + block_K,
                     ],
                     A_shared,
                 )
                 T.copy(
                     B[
-                        pid_n * block_n : (pid_n + 1) * block_n,
-                        k_start : k_start + block_k,
+                        bx * block_N : (bx + 1) * block_N,
+                        k_start : k_start + block_K,
                     ],
                     B_shared,
                 )
 
-                scale_b = scales_b[pid_n * block_n // group_size, k]
-                for i in T.Parallel(block_m):
-                    Scale_C_shared[i] = scales_a[pid_m * block_m + i, k] * scale_b
+                scale_b = scales_b[bx * block_N // group_size, k]
+                for i in T.Parallel(block_M):
+                    Scale_C_shared[i] = scales_a[by * block_M + i, k] * scale_b
 
                 T.gemm(
                     A_shared,
@@ -92,17 +91,17 @@ def fp8_gemm_kernel(
                     C_local,
                     initC=True,
                     b_transpose=True,
-                    size=[block_m, block_k, block_n],
+                    size=[block_M, block_K, block_N],
                 )
 
-                for i, j in T.Parallel(block_m, block_n):
+                for i, j in T.Parallel(block_M, block_N):
                     C_local_accum[i, j] += C_local[i, j] * Scale_C_shared[i]
 
             T.copy(
                 C_local_accum,
                 C[
-                    pid_m * block_m : (pid_m + 1) * block_m,
-                    pid_n * block_n : (pid_n + 1) * block_n,
+                    by * block_M : (by + 1) * block_M,
+                    bx * block_N : (bx + 1) * block_N,
                 ],
             )
 
