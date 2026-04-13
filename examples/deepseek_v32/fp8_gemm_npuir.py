@@ -22,24 +22,21 @@ def _gen_fp8_e4m3_like_tensor(shape, device: torch.device) -> torch.Tensor:
 
 @tl.jit(target="npuir")
 def fp8_gemm_kernel(
-    N,
-    K,
-    out_dtype="float16",
-    in_dtype="float16",
-    accum_dtype="float32",
-    group_size=128,
-    block_m=32,
-    block_n=128,
-    block_k=128,
-    num_stages=2,
+    N, K, out_dtype="float16", in_dtype="float16", accum_dtype="float32"
 ):
     assert out_dtype in ["float16", "float32", "bfloat16"]
+
+    M = T.symbolic("M")
+    group_size = 128
+    block_m = 32
+    block_n = 128
+    block_k = 128
+
     assert in_dtype in ["float16"]
     assert group_size == block_n, "This kernel expects group_size == block_n"
     assert N % block_n == 0, "N must be divisible by block_n"
     assert K % block_k == 0, "K must be divisible by block_k"
 
-    M = T.symbolic("M")
     k_groups = T.ceildiv(K, group_size)
     n_groups = T.ceildiv(N, group_size)
 
@@ -67,7 +64,7 @@ def fp8_gemm_kernel(
 
             T.clear(C_local_accum)
             k_iters = T.ceildiv(K, block_k)
-            for k in T.Pipelined(k_iters, num_stages=num_stages):
+            for k in T.Pipelined(k_iters, num_stages=2):
                 k_start = k * block_k
 
                 T.copy(
@@ -168,11 +165,6 @@ def fp8_gemm(
         out_dtype=out_dtype,
         in_dtype="float16",
         accum_dtype="float32",
-        group_size=group_size,
-        block_m=32,
-        block_n=128,
-        block_k=128,
-        num_stages=2,
     )
 
     c = torch.empty((m, n), dtype=getattr(torch, out_dtype), device=a.device)
