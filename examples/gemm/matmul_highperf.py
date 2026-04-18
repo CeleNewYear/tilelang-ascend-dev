@@ -8,8 +8,9 @@ tilelang.cache.clear_cache()
 
 # shape of L1 is 512KB
 # multibuffer can hide the latency of L1 load, a single buffer use 256KB
-# shape of A1_L1 and B1_l1 is 128KB = 65536 fp16 elements = 512  * 128
-# shape of A2_L1 and B2_l1 is 128KB = 65536 fp16 elements = 512  * 128
+# shape of A1_L1 and B1_l1 is 128KB = 65536 fp16 elements = 256  * 256 (Limited by L0C size use 128 * 256)
+# shape of A2_L1 and B2_l1 is 128KB = 65536 fp16 elements = 256  * 256 (Limited by L0C size use 128 * 256)
+# shape of C1_L0C is 64KB = 16384 fp32 elements = 128 * 128
 
 M = 65536
 N = 65536
@@ -53,7 +54,7 @@ def matmul(block_M, block_N, K_L1, dtype="float16", accum_dtype="float32"):
 
 
 def test_mat_mul():
-    func = matmul(512, 512, 256)
+    func = matmul(128, 128, 256)
     a = torch.randn(M, K).half().npu()
     b = torch.randn(K, N).half().npu()
     c = torch.randn(M, N).half().npu()
