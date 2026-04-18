@@ -26,7 +26,7 @@ def matmul(block_M, block_N, K_L1, dtype="float16", accum_dtype="float32"):
     def main(
         A: T.Tensor((M, K), dtype),
         B: T.Tensor((K, N), dtype),
-        C: T.Tensor((M, N), dtype),
+        C: T.Tensor((M, N), accum_dtype),
     ):
         with T.Kernel(m_num * n_num, is_npu=True) as (cid, _):
             with T.Scope("Cube"):
@@ -57,12 +57,12 @@ def test_mat_mul():
     func = matmul(128, 128, 256)
     a = torch.randn(M, K).half().npu()
     b = torch.randn(K, N).half().npu()
-    c = torch.randn(M, N).half().npu()
+    c = torch.randn(M, N).float().npu()
 
     func(a, b, c)
     print(c)
 
-    ref_c = a @ b
+    ref_c = a.to(torch.float32) @ b.to(torch.float32)
     print(ref_c)
 
     torch.testing.assert_close(c, ref_c, rtol=1e-2, atol=1e-2)
