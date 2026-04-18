@@ -33,18 +33,17 @@ def matmul(block_M, block_N, K_L1, dtype="float16", accum_dtype="float32"):
                 bx = cid * block_M
                 A_L1 = T.alloc_L1([block_M, K], dtype)
                 T.load_nd2nz(A[bx, 0], A_L1, [block_M, K])
-                for by_idx in T.serial(n_num // 2):
-                    by_1 = by_idx * block_N
-                    by_2 = (by_idx + n_num // 2) * block_N
 
-                    B1_L1 = T.alloc_L1([K, block_N], dtype)
-                    C1_L0C = T.alloc_L0C([block_M, block_N], accum_dtype)
-                    B2_L2 = T.alloc_L1([K, block_N], dtype)
-                    C2_L0C = T.alloc_L0C([block_M, block_N], accum_dtype)
+                B1_L1 = T.alloc_L1([K, block_N], dtype)
+                C1_L0C = T.alloc_L0C([block_M, block_N], accum_dtype)
+                B2_L2 = T.alloc_L1([K, block_N], dtype)
+                C2_L0C = T.alloc_L0C([block_M, block_N], accum_dtype)
 
-                    T.load_nd2nz(B[0, by_1], B1_L1, [K, block_N])
-                    T.load_nd2nz(B[0, by_2], B2_L2, [K, block_N])
+                # load 1
+                T.load_nd2nz(B[0, 0], B1_L1, [K, block_N])
 
+                for by_idx in T.serial(n_num // 2 - 1):
+                    # gemm 1
                     T.gemm(
                         A_L1,
                         B1_L1,
@@ -53,6 +52,18 @@ def matmul(block_M, block_N, K_L1, dtype="float16", accum_dtype="float32"):
                         b_transpose=False,
                         size=[block_M, K, block_N],
                     )
+
+                    # load 2
+                    by_2 = (by_idx + n_num // 2) * block_N
+                    T.load_nd2nz(B[0, by_2], B2_L2, [K, block_N])
+
+                    # store 1
+                    by_1 = (by_idx) * block_N
+                    T.store_fixpipe(
+                        C1_L0C, C[bx, by_1], size=[block_M, block_N], enable_nz2nd=True
+                    )
+
+                    # gemm 2
                     T.gemm(
                         A_L1,
                         B2_L2,
@@ -61,12 +72,51 @@ def matmul(block_M, block_N, K_L1, dtype="float16", accum_dtype="float32"):
                         b_transpose=False,
                         size=[block_M, K, block_N],
                     )
-                    T.store_fixpipe(
-                        C1_L0C, C[bx, by_1], size=[block_M, block_N], enable_nz2nd=True
-                    )
+
+                    # load 1
+                    by_1 = (by_idx + 1) * block_N
+                    T.load_nd2nz(B[0, by_1], B1_L1, [K, block_N])
+
+                    # store 2
                     T.store_fixpipe(
                         C2_L0C, C[bx, by_2], size=[block_M, block_N], enable_nz2nd=True
                     )
+
+                # gemm 1
+                T.gemm(
+                    A_L1,
+                    B1_L1,
+                    C1_L0C,
+                    initC=True,
+                    b_transpose=False,
+                    size=[block_M, K, block_N],
+                )
+
+                # load2
+                by_2 = (n_num // 2 - 1 + n_num // 2) * block_N
+                T.load_nd2nz(B[0, by_2], B2_L2, [K, block_N])
+
+                # store 1
+                by_1 = (n_num // 2 - 1) * block_N
+                T.store_fixpipe(
+                    C1_L0C, C[bx, by_1], size=[block_M, block_N], enable_nz2nd=True
+                )
+
+                # gemm 2
+                T.gemm(
+                    A_L1,
+                    B2_L2,
+                    C2_L0C,
+                    initC=True,
+                    b_transpose=False,
+                    size=[block_M, K, block_N],
+                )
+
+                # store 2
+                by_2 = (n_num // 2 - 1 + n_num // 2) * block_N
+                T.store_fixpipe(
+                    C2_L0C, C[bx, by_2], size=[block_M, block_N], enable_nz2nd=True
+                )
 
     return main
 
