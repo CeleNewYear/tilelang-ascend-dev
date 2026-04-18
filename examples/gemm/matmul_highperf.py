@@ -8,8 +8,8 @@ tilelang.cache.clear_cache()
 
 # shape of L1 is 512KB
 # multibuffer can hide the latency of L1 load, a single buffer use 256KB
-# shape of A1_L1 and B1_l1 is 128KB = 65536 fp16 elements = 256  * 256 (Limited by L0C size use 128 * 256)
-# shape of A2_L1 and B2_l1 is 128KB = 65536 fp16 elements = 256  * 256 (Limited by L0C size use 128 * 256)
+# shape of A_L1 and B1_l1 is 128KB = 65536 fp16 elements = 256  * 256 (Limited by_1 L0C size use 128 * 256)
+# shape of A2_L1 and B2_l1 is 128KB = 65536 fp16 elements = 256  * 256 (Limited by_1 L0C size use 128 * 256)
 # shape of C1_L0C is 64KB = 16384 fp32 elements = 128 * 128
 
 M = 1024
@@ -30,25 +30,42 @@ def matmul(block_M, block_N, K_L1, dtype="float16", accum_dtype="float32"):
     ):
         with T.Kernel(m_num, is_npu=True) as (cid, _):
             with T.Scope("Cube"):
-                for by_idx in T.serial(n_num):
-                    bx = cid * block_M
-                    by = by_idx * block_N
-                    A1_L1 = T.alloc_L1([block_M, K], dtype)
+                bx = cid * block_M
+                A_L1 = T.alloc_L1([block_M, K], dtype)
+                T.load_nd2nz(A[bx, 0], A_L1, [block_M, K])
+                for by_idx in T.serial(n_num // 2):
+                    by_1 = by_idx * block_N
+                    by_2 = (by_idx + n_num // 2) * block_N
+
                     B1_L1 = T.alloc_L1([K, block_N], dtype)
                     C1_L0C = T.alloc_L0C([block_M, block_N], accum_dtype)
+                    B2_L2 = T.alloc_L1([K, block_N], dtype)
+                    C2_L0C = T.alloc_L0C([block_M, block_N], accum_dtype)
 
-                    T.load_nd2nz(A[bx, 0], A1_L1, [block_M, K])
-                    T.load_nd2nz(B[0, by], B1_L1, [K, block_N])
+                    T.load_nd2nz(B[0, by_1], B1_L1, [K, block_N])
+                    T.load_nd2nz(B[0, by_2], B2_L2, [K, block_N])
+
                     T.gemm(
-                        A1_L1,
+                        A_L1,
                         B1_L1,
                         C1_L0C,
                         initC=True,
                         b_transpose=False,
                         size=[block_M, K, block_N],
                     )
+                    T.gemm(
+                        A_L1,
+                        B2_L2,
+                        C2_L0C,
+                        initC=True,
+                        b_transpose=False,
+                        size=[block_M, K, block_N],
+                    )
                     T.store_fixpipe(
-                        C1_L0C, C[bx, by], size=[block_M, block_N], enable_nz2nd=True
+                        C1_L0C, C[bx, by_1], size=[block_M, block_N], enable_nz2nd=True
+                    )
+                    T.store_fixpipe(
+                        C2_L0C, C[bx, by_2], size=[block_M, block_N], enable_nz2nd=True
                     )
 
     return main
