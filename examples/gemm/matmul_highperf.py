@@ -12,8 +12,8 @@ tilelang.cache.clear_cache()
 # shape of A2_L1 and B2_l1 is 128KB = 65536 fp16 elements = 256  * 256 (Limited by L0C size use 128 * 256)
 # shape of C1_L0C is 64KB = 16384 fp32 elements = 128 * 128
 
-M = 65536
-N = 65536
+M = 1024
+N = 1024
 K = 256
 
 
@@ -28,27 +28,28 @@ def matmul(block_M, block_N, K_L1, dtype="float16", accum_dtype="float32"):
         B: T.Tensor((K, N), dtype),
         C: T.Tensor((M, N), accum_dtype),
     ):
-        with T.Kernel(m_num * n_num, is_npu=True) as (cid, _):
+        with T.Kernel(m_num, is_npu=True) as (cid, _):
             with T.Scope("Cube"):
-                bx = cid // n_num * block_M
-                by = cid % n_num * block_N
-                A1_L1 = T.alloc_L1([block_M, K], dtype=dtype)
-                B1_L1 = T.alloc_L1([K, block_N], dtype=dtype)
-                C1_L0C = T.alloc_L0C([block_M, block_N], accum_dtype)
+                for by_idx in T.serial(n_num):
+                    bx = cid * block_M
+                    by = by_idx * block_N
+                    A1_L1 = T.alloc_L1([block_M, K], dtype)
+                    B1_L1 = T.alloc_L1([K, block_N], dtype)
+                    C1_L0C = T.alloc_L0C([block_M, block_N], accum_dtype)
 
-                T.load_nd2nz(A[bx, 0], A1_L1, [block_M, K])
-                T.load_nd2nz(B[0, by], B1_L1, [K, block_N])
-                T.gemm(
-                    A1_L1,
-                    B1_L1,
-                    C1_L0C,
-                    initC=True,
-                    b_transpose=False,
-                    size=[block_M, K, block_N],
-                )
-                T.store_fixpipe(
-                    C1_L0C, C[bx, by], size=[block_M, block_N], enable_nz2nd=True
-                )
+                    T.load_nd2nz(A[bx, 0], A1_L1, [block_M, K])
+                    T.load_nd2nz(B[0, by], B1_L1, [K, block_N])
+                    T.gemm(
+                        A1_L1,
+                        B1_L1,
+                        C1_L0C,
+                        initC=True,
+                        b_transpose=False,
+                        size=[block_M, K, block_N],
+                    )
+                    T.store_fixpipe(
+                        C1_L0C, C[bx, by], size=[block_M, block_N], enable_nz2nd=True
+                    )
 
     return main
 
