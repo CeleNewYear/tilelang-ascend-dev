@@ -18,7 +18,7 @@ K = 256
 
 
 @tilelang.jit(target="npuir")
-def matmul(block_M, block_N, K_L1, dtype="float16", accum_dtype="float32"):
+def matmul(block_M, block_N, dtype="float16", accum_dtype="float32"):
     m_num = M // block_M
     n_num = N // block_N
 
@@ -38,27 +38,28 @@ def matmul(block_M, block_N, K_L1, dtype="float16", accum_dtype="float32"):
                 C1_L0C = T.alloc_L0C([block_M, block_N], accum_dtype)
                 B2_L2 = T.alloc_L1([K, block_N], dtype)
                 C2_L0C = T.alloc_L0C([block_M, block_N], accum_dtype)
+                B3_L1 = T.alloc_L1([K, block_N], dtype)
+                C3_L0C = T.alloc_L0C([block_M, block_N], accum_dtype)
 
                 # load 1
                 T.load_nd2nz(B[0, 0], B1_L1, [K, block_N])
 
-                for by_idx in T.serial(n_num // 2 - 1):
-                    # gemm 1
-                    T.gemm(
-                        A_L1,
-                        B1_L1,
-                        C1_L0C,
-                        initC=True,
-                        b_transpose=False,
-                        size=[block_M, K, block_N],
-                    )
+                # gemm 1
+                T.gemm(
+                    A_L1,
+                    B1_L1,
+                    C1_L0C,
+                    initC=True,
+                    b_transpose=False,
+                    size=[block_M, K, block_N],
+                )
 
-                    # load 2
-                    by_2 = (by_idx + n_num // 2) * block_N
-                    T.load_nd2nz(B[0, by_2], B2_L2, [K, block_N])
+                # load 2
+                T.load_nd2nz(B[0, block_N], B2_L2, [K, block_N])
 
+                for by_idx in T.serial(n_num // 3 - 1):
                     # store 1
-                    by_1 = (by_idx) * block_N
+                    by_1 = (by_idx * 3) * block_N
                     T.store_fixpipe(
                         C1_L0C, C[bx, by_1], size=[block_M, block_N], enable_nz2nd=True
                     )
@@ -73,31 +74,51 @@ def matmul(block_M, block_N, K_L1, dtype="float16", accum_dtype="float32"):
                         size=[block_M, K, block_N],
                     )
 
+                    # load 3
+                    by_3 = (by_idx * 3 + 2) * block_N
+                    T.load_nd2nz(B[0, by_3], B3_L1, [K, block_N])
+
                     # load 1
-                    by_1 = (by_idx + 1) * block_N
+                    by_1 = ((by_idx + 1) * 3) * block_N
                     T.load_nd2nz(B[0, by_1], B1_L1, [K, block_N])
 
                     # store 2
+                    by_2 = (by_idx * 3 + 1) * block_N
                     T.store_fixpipe(
                         C2_L0C, C[bx, by_2], size=[block_M, block_N], enable_nz2nd=True
                     )
 
-                # gemm 1
-                T.gemm(
-                    A_L1,
-                    B1_L1,
-                    C1_L0C,
-                    initC=True,
-                    b_transpose=False,
-                    size=[block_M, K, block_N],
-                )
+                    # gemm 3
+                    T.gemm(
+                        A_L1,
+                        B3_L1,
+                        C3_L0C,
+                        initC=True,
+                        b_transpose=False,
+                        size=[block_M, K, block_N],
+                    )
 
-                # load2
-                by_2 = (n_num // 2 - 1 + n_num // 2) * block_N
-                T.load_nd2nz(B[0, by_2], B2_L2, [K, block_N])
+                    # gemm 1
+                    T.gemm(
+                        A_L1,
+                        B1_L1,
+                        C1_L0C,
+                        initC=True,
+                        b_transpose=False,
+                        size=[block_M, K, block_N],
+                    )
+
+                    # load 2
+                    by_2 = ((by_idx + 1) * 3 + 1) * block_N
+                    T.load_nd2nz(B[0, by_2], B2_L2, [K, block_N])
+
+                    # store 3
+                    T.store_fixpipe(
+                        C3_L0C, C[bx, by_3], size=[block_M, block_N], enable_nz2nd=True
+                    )
 
                 # store 1
-                by_1 = (n_num // 2 - 1) * block_N
+                by_1 = ((n_num // 3 - 1) * 3) * block_N
                 T.store_fixpipe(
                     C1_L0C, C[bx, by_1], size=[block_M, block_N], enable_nz2nd=True
                 )
@@ -112,17 +133,36 @@ def matmul(block_M, block_N, K_L1, dtype="float16", accum_dtype="float32"):
                     size=[block_M, K, block_N],
                 )
 
+                # load 3
+                by_3 = ((n_num // 3 - 1) * 3 + 2) * block_N
+                T.load_nd2nz(B[0, by_3], B3_L1, [K, block_N])
+
                 # store 2
-                by_2 = (n_num // 2 - 1 + n_num // 2) * block_N
+                by_2 = ((n_num // 3 - 1) * 3 + 1) * block_N
                 T.store_fixpipe(
                     C2_L0C, C[bx, by_2], size=[block_M, block_N], enable_nz2nd=True
+                )
+
+                # gemm 3
+                T.gemm(
+                    A_L1,
+                    B3_L1,
+                    C3_L0C,
+                    initC=True,
+                    b_transpose=False,
+                    size=[block_M, K, block_N],
+                )
+
+                # store 3
+                T.store_fixpipe(
+                    C3_L0C, C[bx, by_3], size=[block_M, block_N], enable_nz2nd=True
                 )
 
     return main
 
 
 def test_mat_mul():
-    func = matmul(128, 128, 256)
+    func = matmul(64, 128, 256)
     a = torch.randn(M, K).half().npu()
     b = torch.randn(K, N).half().npu()
     c = torch.randn(M, N).float().npu()
