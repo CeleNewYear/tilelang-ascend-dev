@@ -55,7 +55,7 @@ def act_quant_kernel(
 
             x_shared = T.alloc_shared((blk_m, group_size), in_dtype)
             x_local = T.alloc_fragment((blk_m, group_size), in_dtype)
-            amax_local = T.alloc_fragment((blk_m,), scale_dtype)
+            amax_local = T.alloc_fragment((blk_m, 1), scale_dtype)
             s_local = T.alloc_fragment((blk_m,), scale_dtype)
             y_local = T.alloc_fragment((blk_m, group_size), out_dtype)
             y_shared = T.alloc_shared((blk_m, group_size), out_dtype)
@@ -65,11 +65,11 @@ def act_quant_kernel(
                 T.copy(x_shared, x_local)
                 T.reduce_absmax(x_local, amax_local, dim=1)
                 for i in T.Parallel(blk_m):
-                    amax_local[i] = T.max(amax_local[i], 1e-4)
+                    amax_local[i, 0] = T.max(amax_local[i, 0], 1e-4)
                     if round_scale:
-                        s_local[i] = fast_round_scale(amax_local[i], fp8_max_inv)
+                        s_local[i] = fast_round_scale(amax_local[i, 0], fp8_max_inv)
                     else:
-                        s_local[i] = amax_local[i] * fp8_max_inv
+                        s_local[i] = amax_local[i, 0] * fp8_max_inv
                 for i, j in T.Parallel(blk_m, group_size):
                     y_local[i, j] = T.clamp(
                         x_local[i, j] / s_local[i], fp8_min, fp8_max
