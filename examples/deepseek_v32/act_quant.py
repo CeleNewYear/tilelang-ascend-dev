@@ -9,7 +9,7 @@ tilelang.set_log_level("WARNING")
 
 
 BF16 = "bfloat16"
-FP8 = "float8_e4m3"
+FP8 = "float16"
 FP32 = "float32"
 
 
@@ -86,6 +86,7 @@ def act_quant_kernel(
 # Pure-PyTorch reference implementation
 # ---------------------------------------------------------------------------
 
+
 def _fast_round_scale_ref(amax: torch.Tensor, fp8_max_inv: float) -> torch.Tensor:
     """Replicate the bit-manipulation fast_round_scale used in the kernel.
 
@@ -122,7 +123,9 @@ def act_quant_torch_ref(
 
     for j in range(num_groups):
         x_group = x_f32[:, j * group_size : (j + 1) * group_size]
-        amax = x_group.abs().amax(dim=1).clamp(min=1e-4)  # 1e-4: avoid div-by-zero, matches kernel
+        amax = (
+            x_group.abs().amax(dim=1).clamp(min=1e-4)
+        )  # 1e-4: avoid div-by-zero, matches kernel
 
         if round_scale:
             s_val = _fast_round_scale_ref(amax, fp8_max_inv)
@@ -141,6 +144,7 @@ def act_quant_torch_ref(
 # Kernel wrapper
 # ---------------------------------------------------------------------------
 
+
 def act_quant(
     x: torch.Tensor,
     group_size: int = 128,
@@ -157,7 +161,7 @@ def act_quant(
         round_scale=round_scale,
     )
 
-    y = torch.empty((m, n), dtype=torch.float8_e4m3fn, device=x.device)
+    y = torch.empty((m, n), dtype=torch.float16, device=x.device)
     s = torch.empty((m, num_groups), dtype=torch.float32, device=x.device)
     ret = kernel(x, y, s)
     if ret is not None:
@@ -169,6 +173,7 @@ def act_quant(
 # Precision comparison
 # ---------------------------------------------------------------------------
 
+
 def run_test_case(m: int, n: int, round_scale: bool = False):
     group_size = 128
     # n must be a multiple of group_size so every tile is fully covered by the kernel.
@@ -178,7 +183,9 @@ def run_test_case(m: int, n: int, round_scale: bool = False):
     x = torch.randn((m, n), dtype=torch.bfloat16, device=npu_device)
 
     y_kernel, s_kernel = act_quant(x, group_size=group_size, round_scale=round_scale)
-    y_ref, s_ref = act_quant_torch_ref(x, group_size=group_size, round_scale=round_scale)
+    y_ref, s_ref = act_quant_torch_ref(
+        x, group_size=group_size, round_scale=round_scale
+    )
 
     # --- compare scales (should be numerically close) ---
     torch.testing.assert_close(
@@ -206,8 +213,8 @@ def run_test_case(m: int, n: int, round_scale: bool = False):
 
     print(
         f"  m={m:4d}  n={n:4d}  round_scale={round_scale}  "
-        f"scale_max_err={( s_kernel.float() - s_ref.float() ).abs().max().item():.2e}  "
-        f"dequant_max_err={( x_dequant - x.float() ).abs().max().item():.2e}  \033[92mPASS\033[0m"
+        f"scale_max_err={(s_kernel.float() - s_ref.float()).abs().max().item():.2e}  "
+        f"dequant_max_err={(x_dequant - x.float()).abs().max().item():.2e}  \033[92mPASS\033[0m"
     )
 
 
